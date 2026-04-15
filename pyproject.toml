@@ -1,0 +1,19 @@
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "meet-jira-langgraph-mvp"
+version = "0.1.0"
+description = "LangGraph MVP for extracting Jira task schema from meeting transcripts"
+readme = "README.md"
+authors = ["Bharath Kumar <bharath@example.com>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+langgraph = "*"
+langchain-core = "*"
+langchain-google-genai = "*"
+pydantic = "*"
+python-dotenv = "*"
