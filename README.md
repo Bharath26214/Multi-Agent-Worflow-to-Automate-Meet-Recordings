@@ -3,26 +3,37 @@
 This MVP covers only:
 - raw call recording transcript text input
 - extraction via a LangGraph extractor agent
-- normalized output schema containing only `type="task"` events
+- mapping extracted tasks into Jira "create issue" payload drafts
 
-It does **not** create Jira tickets yet (next step).
+It does **not** call the Jira API yet (it only generates payload drafts).
 
 ## Setup
 
 ```bash
 poetry install
-export GOOGLE_API_KEY="your_key_here"
+export OPENAI_API_KEY="your_key_here"
+# Optional: choose an OpenAI chat model
+export OPENAI_MODEL="gpt-4o-mini"
+
+# Optional: map extracted assignee names/emails to Jira accountIds
+# Format: {"X":"abcd123", "x@company.com":"abcd123"}
+export JIRA_ASSIGNEE_ACCOUNTID_MAP_JSON='{"X":"PUT_ACCOUNT_ID_HERE"}'
 ```
 
 ## Run
 
 ```bash
 poetry run python mvp_jira_extractor.py
+
+# Production-style src/ entrypoint:
+poetry run python src/main.py
 ```
 
-The script includes a sample transcript and prints extracted task objects in JSON.
+The script includes a sample transcript and prints:
+- `extracted_tasks`: extracted `type="task"` events
+- `jira_tickets_batch`: all Jira issues grouped in one Pydantic batch object
 
-## Output Schema (task-only)
+## Output Schema (tasks + Jira payloads)
 
 Each extracted item follows:
 

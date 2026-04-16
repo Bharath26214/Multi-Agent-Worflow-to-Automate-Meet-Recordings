@@ -1,0 +1,40 @@
+[00:00] John: Good morning team. Let's focus on API integration and release prep.
+[00:10] Mike: Morning everyone.
+[00:15] Priya: Good morning!
+[00:20] Alex: Hey team.
+
+[00:25] John: First, let's review yesterday’s progress.
+[00:30] Priya: Yesterday we completed auth middleware tests and deployed to staging.
+[00:40] Mike: I worked on webhook reliability improvements.
+[00:48] Alex: I started integrating Stripe APIs.
+
+[01:00] John: Great progress. Now let’s align on tasks.
+
+[01:05] John: Alex, please finish Stripe API integration by 2026-04-20. This is high priority.
+[01:20] Alex: Got it, I will complete Stripe integration by 2026-04-20.
+
+[01:30] John: Priya, create end-to-end test cases for checkout flow by 2026-04-21. Medium priority.
+[01:45] Priya: Sure, I’ll take that.
+
+[01:55] John: Mike, fix webhook retry bug and push a patch by 2026-04-19. High priority.
+[02:10] Mike: Okay, I will handle it.
+
+[02:20] John: Alex, update API documentation for payment endpoints by 2026-04-22. Low priority.
+
+[02:35] John: Also, we should have a follow-up meeting to track progress.
+
+[02:40] John: Let’s schedule a follow-up meeting on 2026-04-23 at 10:00 AM UTC.
+[02:50] Priya: Works for me.
+[02:55] Mike: Same here.
+[03:00] Alex: Yes, I’ll join.
+
+[03:10] John: Please include the product team in that meeting.
+[03:20] John: I will send out the calendar invite.
+
+[03:30] John: Any blockers?
+[03:35] Alex: No blockers from my side.
+[03:40] Priya: All good.
+[03:45] Mike: Nothing major.
+
+[03:50] John: Great. Let’s aim to complete all tasks before the next meeting.
+[04:00] John: That’s all for today.

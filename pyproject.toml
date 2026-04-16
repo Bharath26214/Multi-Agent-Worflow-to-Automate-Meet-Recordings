@@ -14,7 +14,7 @@ package-mode = false
 python = ">=3.10,<4.0"
 langgraph = "*"
 langchain-core = "*"
-langchain-google-genai = "*"
+langchain-openai = "*"
 pydantic = "*"
 python-dotenv = "*"
 google-api-python-client = "*"
