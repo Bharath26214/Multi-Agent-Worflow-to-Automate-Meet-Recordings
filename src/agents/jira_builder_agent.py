@@ -7,13 +7,17 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from core.models import ExtractedTask, JiraTicketsBatch
+from core.models import DraftJiraTicket, ExtractedTask, JiraReviewQueue, JiraTicketsBatch
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 class JiraBuilderAgent:
     """Agent that maps extracted tasks into Jira create-issue payloads."""
 
     def __init__(self, project_key: Optional[str] = None):
         self.project_key = project_key or os.getenv("JIRA_PROJECT_KEY", "KAN")
+        self.min_confidence = float(os.getenv("JIRA_MIN_CONFIDENCE", "0.75"))
 
     @staticmethod
     def _build_adf_description(task: ExtractedTask) -> Dict[str, Any]:
@@ -42,14 +46,6 @@ class JiraBuilderAgent:
         }
 
     @staticmethod
-    def _looks_like_bug(description: str) -> bool:
-        d = description.lower()
-        return any(
-            k in d
-            for k in ["bug", "error", "exception", "fix", "login", "throws"]
-        )
-
-    @staticmethod
     def _load_assignee_accountid_map() -> Dict[str, str]:
         raw = os.getenv("JIRA_ASSIGNEE_ACCOUNTID_MAP_JSON", "")
         if not raw.strip():
@@ -76,21 +72,60 @@ class JiraBuilderAgent:
         key = str(task.assigned_by).lower()
         return mapping.get(key)
 
+    @staticmethod
+    def _is_task_clear(task: ExtractedTask) -> bool:
+        description = task.description.strip().lower()
+        if len(description) < 12:
+            return False
+        if len(description.split()) < 3:
+            return False
+        unclear_markers = ["tbd", "something", "stuff", "maybe", "later", "follow up"]
+        return not any(marker in description for marker in unclear_markers)
+
+    def _draft_reasons(
+        self,
+        task: ExtractedTask,
+        assignee_account_id: Optional[str],
+    ) -> List[str]:
+        reasons: List[str] = []
+        if task.assigned_to and not assignee_account_id:
+            reasons.append("assignee_not_found")
+        if not task.assigned_to:
+            reasons.append("assignee_not_found")
+        if not task.due_date:
+            reasons.append("due_date_missing")
+        if not task.priority:
+            reasons.append("priority_missing")
+        if not self._is_task_clear(task):
+            reasons.append("task_not_clear")
+        return reasons
+
     def build_jira_tickets_batch(
         self,
         tasks: List[ExtractedTask],
         project_key: Optional[str] = None,
     ) -> JiraTicketsBatch:
+        review_queue = self.build_jira_review_queue(tasks, project_key=project_key)
+        return review_queue.ready_batch
+
+    def build_jira_review_queue(
+        self,
+        tasks: List[ExtractedTask],
+        project_key: Optional[str] = None,
+    ) -> JiraReviewQueue:
+        logger.info("Building Jira payloads and draft review queue")
         project_key = project_key or self.project_key
 
-        payload_models: List[JiraTicketsBatch.JiraCreateIssuePayload] = []
+        ready_payloads: List[JiraTicketsBatch.JiraCreateIssuePayload] = []
+        draft_tickets: List[DraftJiraTicket] = []
         for task in tasks:
             labels: List[str] = [
                 "created-by-meet-agent",
                 f"event_id:{task.event_id}",
             ]
 
-            if task.assigned_to and not self._resolve_assignee_account_id(task):
+            assignee_account_id = self._resolve_assignee_account_id(task)
+            if task.assigned_to and not assignee_account_id:
                 labels.append(
                     f"unresolved-assignee:{str(task.assigned_to[0]).lower()}"
                 )
@@ -101,9 +136,7 @@ class JiraBuilderAgent:
                 else None
             )
 
-            issuetype_obj = JiraTicketsBatch.JiraIssueType(
-                name="Bug" if self._looks_like_bug(task.description) else "Task"
-            )
+            issuetype_obj = JiraTicketsBatch.JiraIssueType(name="Task")
 
             description_obj = JiraTicketsBatch.JiraADFDocument(
                 **self._build_adf_description(task)
@@ -122,19 +155,31 @@ class JiraBuilderAgent:
             if priority_obj:
                 fields["priority"] = priority_obj
 
-            account_id = self._resolve_assignee_account_id(task)
-            if account_id:
+            if assignee_account_id:
                 fields["assignee"] = JiraTicketsBatch.JiraAssignee(
-                    accountId=account_id
+                    accountId=assignee_account_id
                 )
 
-            payload_models.append(
-                JiraTicketsBatch.JiraCreateIssuePayload(
-                    fields=JiraTicketsBatch.JiraIssueFields.model_validate(fields)
-                )
+            payload_model = JiraTicketsBatch.JiraCreateIssuePayload(
+                fields=JiraTicketsBatch.JiraIssueFields.model_validate(fields)
             )
+            reasons = self._draft_reasons(task, assignee_account_id)
+            if reasons:
+                draft_tickets.append(
+                    DraftJiraTicket(
+                        event_id=task.event_id,
+                        summary=task.description.strip(),
+                        reasons=reasons,
+                        payload=payload_model,
+                    )
+                )
+            else:
+                ready_payloads.append(payload_model)
 
-        return JiraTicketsBatch(tickets=payload_models)
+        return JiraReviewQueue(
+            ready_batch=JiraTicketsBatch(tickets=ready_payloads),
+            draft_tickets=draft_tickets,
+        )
 
     @staticmethod
     def _jira_request_headers() -> Dict[str, str]:
@@ -157,6 +202,7 @@ class JiraBuilderAgent:
         Create Jira issues from an already-built batch payload.
         Returns per-ticket status and response payload text/json.
         """
+        logger.info("Creating Jira tickets: %d ticket(s)", len(batch.tickets))
         domain = os.getenv("JIRA_DOMAIN")
         if not domain:
             raise RuntimeError("JIRA_DOMAIN must be set to create Jira issues.")
@@ -174,6 +220,12 @@ class JiraBuilderAgent:
             except ValueError:
                 item["response"] = response.text
             results.append(item)
+        success_count = sum(1 for x in results if int(x["status_code"]) in {200, 201})
+        logger.info(
+            "Jira create complete: %d success, %d failed",
+            success_count,
+            len(results) - success_count,
+        )
         return results
 
     def build_and_create_jira_issues(

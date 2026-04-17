@@ -259,15 +259,10 @@ if __name__ == "__main__":
 
     started_at = datetime.now(timezone.utc).isoformat()
     out = run_mvp(sample_transcript)
-    print(
-        json.dumps(
-            {
-                "run_started_at": started_at,
-                "task_count": len(out["extracted_tasks"]),
-                "tasks": out["extracted_tasks"],
-                "jira_ticket_count": len(out["jira_tickets_batch"].tickets),
-                "jira_tickets_batch": out["jira_tickets_batch"].model_dump(),
-            },
-            indent=2,
-        )
-    )
+    _ = {
+        "run_started_at": started_at,
+        "task_count": len(out["extracted_tasks"]),
+        "tasks": out["extracted_tasks"],
+        "jira_ticket_count": len(out["jira_tickets_batch"].tickets),
+        "jira_tickets_batch": out["jira_tickets_batch"].model_dump(),
+    }

@@ -70,3 +70,46 @@ class JiraTicketsBatch(BaseModel):
 JiraTicketsBatch.model_rebuild()
 
 
+class DraftJiraTicket(BaseModel):
+    """A draft Jira ticket requiring human approval."""
+
+    event_id: str
+    summary: str
+    reasons: List[str]
+    payload: JiraTicketsBatch.JiraCreateIssuePayload
+
+
+class TicketEditInstruction(BaseModel):
+    """Structured edit directives derived from human natural-language prompts."""
+
+    assign_to: Optional[str] = Field(
+        default=None, description="Human-readable assignee name to resolve."
+    )
+    new_summary: Optional[str] = Field(
+        default=None, description="Updated Jira summary."
+    )
+    new_description: Optional[str] = Field(
+        default=None, description="Updated plain text description for Jira ADF."
+    )
+    new_due_date: Optional[str] = Field(
+        default=None, description="Updated due date in YYYY-MM-DD format."
+    )
+    new_priority: Optional[Literal["High", "Medium", "Low"]] = Field(
+        default=None, description="Updated Jira priority when explicitly requested."
+    )
+    remove_reasons: List[str] = Field(
+        default_factory=list,
+        description="Draft reasons to remove, e.g., low_confidence, task_not_clear.",
+    )
+    add_reason_notes: Optional[str] = Field(
+        default=None, description="Optional notes added by human reviewer."
+    )
+
+
+class JiraReviewQueue(BaseModel):
+    """Split output from Jira builder before human-in-the-loop step."""
+
+    ready_batch: JiraTicketsBatch
+    draft_tickets: List[DraftJiraTicket] = Field(default_factory=list)
+
+
