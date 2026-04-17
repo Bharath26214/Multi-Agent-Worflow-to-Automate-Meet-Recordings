@@ -31,6 +31,44 @@ class ExtractorOutput(BaseModel):
     tasks: List[ExtractedTask]
 
 
+class MeetingSummary(BaseModel):
+    """Structured summary generated for the full meeting transcript."""
+
+    meet_id: str = Field(
+        default="",
+        description="Meeting identifier when available.",
+    )
+    attendees: List[str] = Field(
+        default_factory=list,
+        description="List of participants who attended the meeting.",
+    )
+    organizer: str = Field(
+        default="",
+        description="Meeting organizer/host when available.",
+    )
+    meeting_timestamp: str = Field(
+        default="",
+        description="Meeting date/time or timestamp in ISO format when available.",
+    )
+    summary: str = Field(description="Concise overall meeting summary.")
+    key_points: List[str] = Field(default_factory=list)
+    action_items: List[str] = Field(
+        default_factory=list,
+        description="Action items discussed in the meeting, not limited to Jira-ready tasks.",
+    )
+    future_meetings: List[str] = Field(
+        default_factory=list,
+        description="Any planned/follow-up meetings mentioned in the transcript.",
+    )
+    deadlines: List[str] = Field(
+        default_factory=list,
+        description="Deadline statements or date commitments captured from the meeting.",
+    )
+    decisions: List[str] = Field(default_factory=list)
+    risks: List[str] = Field(default_factory=list)
+    next_steps: List[str] = Field(default_factory=list)
+
+
 class JiraTicketsBatch(BaseModel):
     """All Jira create-issue payloads grouped in one typed Pydantic object."""
 

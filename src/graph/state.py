@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional, TypedDict
 
-from core.models import DraftJiraTicket, JiraTicketsBatch
+from core.models import DraftJiraTicket, JiraTicketsBatch, MeetingSummary
 
 
 class GraphState(TypedDict):
@@ -17,4 +17,5 @@ class GraphState(TypedDict):
     current_draft_ticket: Optional[DraftJiraTicket]
     review_action: str
     review_edit_prompt: str
+    meeting_summary: MeetingSummary
 

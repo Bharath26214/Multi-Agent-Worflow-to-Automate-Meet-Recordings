@@ -7,12 +7,14 @@ from langgraph.graph import END, START, StateGraph
 from agents.extractor_agent import ExtractorAgent
 from agents.jira_builder_agent import JiraBuilderAgent
 from agents.review_agent import ReviewAgent
+from agents.summary_agent import SummaryAgent
 from core.models import (
     DraftJiraTicket,
     ExtractedTask,
     ExtractorOutput,
     JiraReviewQueue,
     JiraTicketsBatch,
+    MeetingSummary,
 )
 from graph.state import GraphState
 from utils.logger import get_logger
@@ -26,19 +28,7 @@ def _extract_tasks_node(state: GraphState) -> GraphState:
     result: ExtractorOutput = extractor.extract_tasks_from_text(
         state["raw_recording_text"]
     )
-    return {
-        "extracted_tasks": [t.model_dump() for t in result.tasks],
-        "jira_tickets_batch": state["jira_tickets_batch"],
-        "draft_tickets": state["draft_tickets"],
-        "draft_tickets_for_review": state["draft_tickets_for_review"],
-        "approved_draft_tickets_batch": state["approved_draft_tickets_batch"],
-        "rejected_draft_tickets": state["rejected_draft_tickets"],
-        "review_index": state["review_index"],
-        "current_draft_ticket": state["current_draft_ticket"],
-        "review_action": state["review_action"],
-        "review_edit_prompt": state["review_edit_prompt"],
-        "raw_recording_text": state["raw_recording_text"],
-    }
+    return {"extracted_tasks": [t.model_dump() for t in result.tasks]}
 
 
 def _build_jira_tickets_node(state: GraphState) -> GraphState:
@@ -51,26 +41,21 @@ def _build_jira_tickets_node(state: GraphState) -> GraphState:
     batch: JiraTicketsBatch = review_queue.ready_batch
     draft_tickets: List[DraftJiraTicket] = review_queue.draft_tickets
     return {
-        "extracted_tasks": state["extracted_tasks"],
         "jira_tickets_batch": batch,
         "draft_tickets": draft_tickets,
-        "draft_tickets_for_review": state["draft_tickets_for_review"],
-        "approved_draft_tickets_batch": state["approved_draft_tickets_batch"],
-        "rejected_draft_tickets": state["rejected_draft_tickets"],
-        "review_index": state["review_index"],
-        "current_draft_ticket": state["current_draft_ticket"],
-        "review_action": state["review_action"],
-        "review_edit_prompt": state["review_edit_prompt"],
-        "raw_recording_text": state["raw_recording_text"],
     }
+
+
+def _generate_summary_node(state: GraphState) -> GraphState:
+    logger.info("Generating Meeting Summary")
+    summary_agent = SummaryAgent()
+    meeting_summary: MeetingSummary = summary_agent.summarize(state["raw_recording_text"])
+    return {"meeting_summary": meeting_summary}
 
 
 def _prepare_draft_review_node(state: GraphState) -> GraphState:
     logger.info("Preparing draft tickets for review")
     return {
-        "extracted_tasks": state["extracted_tasks"],
-        "jira_tickets_batch": state["jira_tickets_batch"],
-        "draft_tickets": state["draft_tickets"],
         "draft_tickets_for_review": state["draft_tickets"],
         "approved_draft_tickets_batch": JiraTicketsBatch(tickets=[]),
         "rejected_draft_tickets": [],
@@ -78,7 +63,6 @@ def _prepare_draft_review_node(state: GraphState) -> GraphState:
         "current_draft_ticket": None,
         "review_action": "",
         "review_edit_prompt": "",
-        "raw_recording_text": state["raw_recording_text"],
     }
 
 
@@ -97,6 +81,7 @@ def _select_next_draft_node(state: GraphState) -> GraphState:
         "current_draft_ticket": current,
         "review_action": "",
         "review_edit_prompt": "",
+        "meeting_summary": state["meeting_summary"],
         "raw_recording_text": state["raw_recording_text"],
     }
 
@@ -153,6 +138,7 @@ def _collect_review_decision_node(state: GraphState) -> GraphState:
         "current_draft_ticket": state["current_draft_ticket"],
         "review_action": normalized_action,
         "review_edit_prompt": edit_prompt,
+        "meeting_summary": state["meeting_summary"],
         "raw_recording_text": state["raw_recording_text"],
     }
 
@@ -193,6 +179,7 @@ def _review_agent_edit_node(state: GraphState) -> GraphState:
         "current_draft_ticket": edited_draft,
         "review_action": "",
         "review_edit_prompt": "",
+        "meeting_summary": state["meeting_summary"],
         "raw_recording_text": state["raw_recording_text"],
     }
 
@@ -220,6 +207,7 @@ def _approve_draft_node(state: GraphState) -> GraphState:
         "current_draft_ticket": None,
         "review_action": "",
         "review_edit_prompt": "",
+        "meeting_summary": state["meeting_summary"],
         "raw_recording_text": state["raw_recording_text"],
     }
 
@@ -240,6 +228,7 @@ def _reject_draft_node(state: GraphState) -> GraphState:
         "current_draft_ticket": None,
         "review_action": "",
         "review_edit_prompt": "",
+        "meeting_summary": state["meeting_summary"],
         "raw_recording_text": state["raw_recording_text"],
     }
 
@@ -261,6 +250,7 @@ def _end_review_node(state: GraphState) -> GraphState:
         "current_draft_ticket": state["current_draft_ticket"],
         "review_action": state["review_action"],
         "review_edit_prompt": state["review_edit_prompt"],
+        "meeting_summary": state["meeting_summary"],
         "raw_recording_text": state["raw_recording_text"],
     }
 
@@ -269,6 +259,7 @@ def build_graph():
     graph = StateGraph(GraphState)
     graph.add_node("extract_tasks", _extract_tasks_node)
     graph.add_node("build_jira_tickets", _build_jira_tickets_node)
+    graph.add_node("generate_summary", _generate_summary_node)
     graph.add_node("prepare_draft_review", _prepare_draft_review_node)
     graph.add_node("select_next_draft", _select_next_draft_node)
     graph.add_node("collect_review_decision", _collect_review_decision_node)
@@ -276,9 +267,10 @@ def build_graph():
     graph.add_node("approve_draft", _approve_draft_node)
     graph.add_node("reject_draft", _reject_draft_node)
     graph.add_node("end_review", _end_review_node)
+    graph.add_edge(START, "generate_summary")
     graph.add_edge(START, "extract_tasks")
     graph.add_edge("extract_tasks", "build_jira_tickets")
-    graph.add_edge("build_jira_tickets", "prepare_draft_review")
+    graph.add_edge(["build_jira_tickets", "generate_summary"], "prepare_draft_review")
     graph.add_edge("prepare_draft_review", "select_next_draft")
     graph.add_conditional_edges(
         "select_next_draft",

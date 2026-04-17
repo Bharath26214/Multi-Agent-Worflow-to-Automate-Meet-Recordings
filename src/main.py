@@ -8,7 +8,7 @@ SRC_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(SRC_ROOT))
 
 from graph.workflow import build_graph  # noqa: E402
-from core.models import JiraTicketsBatch  # noqa: E402
+from core.models import JiraTicketsBatch, MeetingSummary  # noqa: E402
 from agents.jira_builder_agent import JiraBuilderAgent  # noqa: E402
 from utils.logger import get_logger  # noqa: E402
 
@@ -30,6 +30,13 @@ def run_demo(raw_recording_text: str):
         "current_draft_ticket": None,
         "review_action": "",
         "review_edit_prompt": "",
+        "meeting_summary": MeetingSummary(
+            summary="",
+            key_points=[],
+            decisions=[],
+            risks=[],
+            next_steps=[],
+        ),
     }
     final_state = graph.invoke(initial_state)
     logger.info(
@@ -42,6 +49,7 @@ def run_demo(raw_recording_text: str):
         "extracted_tasks": final_state["extracted_tasks"],
         "ready_jira_tickets_batch": final_state["jira_tickets_batch"],
         "draft_tickets": final_state["draft_tickets"],
+        "meeting_summary": final_state["meeting_summary"],
     }
     jira_builder = JiraBuilderAgent()
     output["approved_draft_tickets_batch"] = final_state["approved_draft_tickets_batch"]
@@ -82,4 +90,5 @@ if __name__ == "__main__":
 
     out = run_demo(sample_transcript)
     # Keep only Jira create responses as terminal output.
+    print(out["meeting_summary"])
     print(out["jira_create_results"])
