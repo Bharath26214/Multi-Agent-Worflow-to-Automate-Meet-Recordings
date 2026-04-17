@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 import sys
 import uuid
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +17,6 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from agents.extractor_agent import ExtractorAgent  # noqa: E402
 from agents.jira_builder_agent import JiraBuilderAgent  # noqa: E402
-from agents.review_agent import ReviewAgent  # noqa: E402
 from core.models import DraftJiraTicket, ExtractedTask, JiraTicketsBatch  # noqa: E402
 from utils.logger import get_logger  # noqa: E402
 
@@ -39,7 +39,11 @@ class StartSessionRequest(BaseModel):
 
 
 class EditDraftRequest(BaseModel):
-    instruction: str = Field(min_length=1)
+    assignee_name: Optional[str] = None
+    due_date: Optional[str] = None
+    priority: Optional[str] = None
+    summary: Optional[str] = None
+    description: Optional[str] = None
 
 
 class SessionState(BaseModel):
@@ -80,6 +84,57 @@ def _raise_external_service_error(stage: str, exc: Exception) -> None:
     raise HTTPException(status_code=503, detail=detail) from exc
 
 
+def _load_assignee_accountid_map() -> dict[str, str]:
+    return JiraBuilderAgent._load_assignee_accountid_map()
+
+
+def _extract_adf_text(description: JiraTicketsBatch.JiraADFDocument) -> str:
+    parts = []
+    for block in description.content:
+        for chunk in block.get("content", []):
+            value = chunk.get("text")
+            if value:
+                parts.append(str(value))
+    return " ".join(parts).strip()
+
+
+def _to_adf(text: str) -> JiraTicketsBatch.JiraADFDocument:
+    return JiraTicketsBatch.JiraADFDocument(
+        type="doc",
+        version=1,
+        content=[
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": text.strip()}],
+            }
+        ],
+    )
+
+
+def _is_task_clear(summary: str, description_text: str) -> bool:
+    text = f"{summary} {description_text}".strip().lower()
+    if len(text) < 12:
+        return False
+    if len(text.split()) < 3:
+        return False
+    unclear_markers = ["tbd", "something", "stuff", "maybe", "later", "follow up"]
+    return not any(marker in text for marker in unclear_markers)
+
+
+def _recompute_reasons(payload: JiraTicketsBatch.JiraCreateIssuePayload) -> list[str]:
+    reasons: list[str] = []
+    if payload.fields.assignee is None:
+        reasons.append("assignee_not_found")
+    if payload.fields.duedate is None:
+        reasons.append("due_date_missing")
+    if payload.fields.priority is None:
+        reasons.append("priority_missing")
+    description_text = _extract_adf_text(payload.fields.description)
+    if not _is_task_clear(payload.fields.summary, description_text):
+        reasons.append("task_not_clear")
+    return reasons
+
+
 @app.post("/api/sessions")
 def start_session(request: StartSessionRequest) -> dict:
     logger.info("Starting UI session")
@@ -115,20 +170,55 @@ def get_session(session_id: str) -> dict:
 @app.post("/api/sessions/{session_id}/drafts/{event_id}/edit")
 def edit_draft(session_id: str, event_id: str, request: EditDraftRequest) -> dict:
     state = _get_session(session_id)
-    review_agent = ReviewAgent()
 
     idx = next((i for i, d in enumerate(state.draft_tickets) if d.event_id == event_id), -1)
     if idx == -1:
         raise HTTPException(status_code=404, detail="Draft not found")
 
     current = state.draft_tickets[idx]
-    try:
-        instruction = review_agent.interpret_edit_prompt(current, request.instruction)
-        updated = review_agent.apply_edit_to_draft(current, instruction)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        _raise_external_service_error("Draft edit", exc)
+    payload_dict = current.payload.model_dump()
+    fields = payload_dict["fields"]
+
+    if request.assignee_name:
+        mapping = _load_assignee_accountid_map()
+        account_id = mapping.get(request.assignee_name.strip().lower())
+        if not account_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Assignee '{request.assignee_name}' not found in assignee map.",
+            )
+        fields["assignee"] = {"accountId": account_id}
+
+    if request.due_date:
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", request.due_date.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="due_date must be in YYYY-MM-DD format.",
+            )
+        fields["duedate"] = request.due_date.strip()
+
+    if request.priority:
+        normalized = request.priority.strip().title()
+        if normalized not in {"High", "Medium", "Low"}:
+            raise HTTPException(
+                status_code=400,
+                detail="priority must be one of: High, Medium, Low.",
+            )
+        fields["priority"] = {"name": normalized}
+
+    if request.summary:
+        fields["summary"] = request.summary.strip()
+    if request.description:
+        fields["description"] = _to_adf(request.description).model_dump()
+
+    updated_payload = JiraTicketsBatch.JiraCreateIssuePayload.model_validate(payload_dict)
+    updated_reasons = _recompute_reasons(updated_payload)
+    updated = DraftJiraTicket(
+        event_id=current.event_id,
+        summary=updated_payload.fields.summary,
+        reasons=updated_reasons,
+        payload=updated_payload,
+    )
     state.draft_tickets[idx] = updated
     return _serialize_session(session_id, state)
 

@@ -44,7 +44,11 @@ function render() {
             <strong>${draft.event_id}</strong> - ${draft.summary}
             <div>Reasons: ${draft.reasons && draft.reasons.length ? draft.reasons.join(", ") : "none"}</div>
             <div class="row">
-              <input id="edit-${draft.event_id}" type="text" placeholder="Edit instruction (e.g., assign to Priya with due date 2026-04-20)" />
+              ${draft.reasons.includes("assignee_not_found") ? `<input id="assignee-${draft.event_id}" type="text" placeholder="Assignee name (e.g., Priya)" />` : ""}
+              ${draft.reasons.includes("due_date_missing") ? `<input id="duedate-${draft.event_id}" type="text" placeholder="Due date YYYY-MM-DD" />` : ""}
+              ${draft.reasons.includes("priority_missing") ? `<input id="priority-${draft.event_id}" type="text" placeholder="Priority: High | Medium | Low" />` : ""}
+              ${draft.reasons.includes("task_not_clear") ? `<input id="summary-${draft.event_id}" type="text" placeholder="Clear summary" />` : ""}
+              ${draft.reasons.includes("task_not_clear") ? `<input id="description-${draft.event_id}" type="text" placeholder="Clear description" />` : ""}
               <button data-action="edit" data-event="${draft.event_id}">Edit</button>
               <button data-action="approve" data-event="${draft.event_id}">Approve</button>
               <button data-action="reject" data-event="${draft.event_id}">Reject</button>
@@ -101,10 +105,21 @@ draftsEl.addEventListener("click", async (event) => {
     let endpoint = `/api/sessions/${sessionId}/drafts/${eventId}/${action}`;
     let options = { method: "POST", headers: { "Content-Type": "application/json" } };
     if (action === "edit") {
-      const input = document.getElementById(`edit-${eventId}`);
-      const instruction = input && input.value ? input.value.trim() : "";
-      if (!instruction) throw new Error("Edit instruction is required.");
-      options.body = JSON.stringify({ instruction });
+      const assignee = document.getElementById(`assignee-${eventId}`);
+      const dueDate = document.getElementById(`duedate-${eventId}`);
+      const priority = document.getElementById(`priority-${eventId}`);
+      const summary = document.getElementById(`summary-${eventId}`);
+      const description = document.getElementById(`description-${eventId}`);
+      const payload = {
+        assignee_name: assignee && assignee.value ? assignee.value.trim() : null,
+        due_date: dueDate && dueDate.value ? dueDate.value.trim() : null,
+        priority: priority && priority.value ? priority.value.trim() : null,
+        summary: summary && summary.value ? summary.value.trim() : null,
+        description: description && description.value ? description.value.trim() : null,
+      };
+      const hasAnyValue = Object.values(payload).some((v) => Boolean(v));
+      if (!hasAnyValue) throw new Error("Provide at least one correction field.");
+      options.body = JSON.stringify(payload);
     }
 
     const res = await fetch(endpoint, options);
