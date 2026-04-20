@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from typing import Any, Dict
 from typing import List
 
 from langgraph.graph import END, START, StateGraph
@@ -8,6 +10,7 @@ from agents.extractor_agent import ExtractorAgent
 from agents.jira_builder_agent import JiraBuilderAgent
 from agents.review_agent import ReviewAgent
 from agents.summary_agent import SummaryAgent
+from agents.transcriber_agent import TranscriberAgent
 from core.models import (
     DraftJiraTicket,
     ExtractedTask,
@@ -26,7 +29,7 @@ def _extract_tasks_node(state: GraphState) -> GraphState:
     logger.info("Extracting Tasks")
     extractor = ExtractorAgent()
     result: ExtractorOutput = extractor.extract_tasks_from_text(
-        state["raw_recording_text"]
+        state["diarized_transcript_text"]
     )
     return {"extracted_tasks": [t.model_dump() for t in result.tasks]}
 
@@ -49,8 +52,55 @@ def _build_jira_tickets_node(state: GraphState) -> GraphState:
 def _generate_summary_node(state: GraphState) -> GraphState:
     logger.info("Generating Meeting Summary")
     summary_agent = SummaryAgent()
-    meeting_summary: MeetingSummary = summary_agent.summarize(state["raw_recording_text"])
+    meeting_summary: MeetingSummary = summary_agent.summarize(
+        state["diarized_transcript_text"]
+    )
     return {"meeting_summary": meeting_summary}
+
+
+def _transcribe_recording_node(state: GraphState) -> GraphState:
+    logger.info("Transcribing meeting recording")
+    transcriber = TranscriberAgent()
+    transcript_text = transcriber.transcribe_audio_file(state["recording_file_path"])
+    logger.info("Transcriber output:\n%s", transcript_text)
+    return {"meeting_transcript_text": transcript_text}
+
+
+def _diarize_speakers_node(state: GraphState) -> GraphState:
+    logger.info("Applying speaker diarization normalization")
+    lines = state["meeting_transcript_text"].splitlines()
+    normalized_lines: List[str] = []
+    current_speaker = "Speaker"
+    pattern = re.compile(
+        r"^\[(?P<ts>\d{2}:\d{2})\]\s+Speaker:\s+(?P<name>[A-Za-z][A-Za-z0-9_-]{1,40})\s+say(?:s|said)\s*,?\s*(?P<text>.+)$",
+        flags=re.IGNORECASE,
+    )
+    fallback_pattern = re.compile(
+        r"^\[(?P<ts>\d{2}:\d{2})\]\s+Speaker:\s+(?P<text>.+)$",
+        flags=re.IGNORECASE,
+    )
+
+    for line in lines:
+        raw = line.strip()
+        if not raw:
+            continue
+
+        m = pattern.match(raw)
+        if m:
+            current_speaker = m.group("name")
+            normalized_lines.append(f"[{m.group('ts')}] {current_speaker}: {m.group('text').strip()}")
+            continue
+
+        f = fallback_pattern.match(raw)
+        if f:
+            normalized_lines.append(f"[{f.group('ts')}] {current_speaker}: {f.group('text').strip()}")
+            continue
+
+        normalized_lines.append(raw)
+
+    diarized = "\n".join(normalized_lines).strip()
+    logger.info("Diarized transcript output:\n%s", diarized)
+    return {"diarized_transcript_text": diarized}
 
 
 def _prepare_draft_review_node(state: GraphState) -> GraphState:
@@ -64,6 +114,21 @@ def _prepare_draft_review_node(state: GraphState) -> GraphState:
         "review_action": "",
         "review_edit_prompt": "",
     }
+
+
+def _raise_ready_tickets_node(state: GraphState) -> GraphState:
+    ready_batch = state["jira_tickets_batch"]
+    if not ready_batch.tickets:
+        logger.info("No ready Jira tickets to raise immediately")
+        return {"jira_create_results": state["jira_create_results"]}
+
+    logger.info(
+        "Raising ready Jira tickets immediately: %d ticket(s)",
+        len(ready_batch.tickets),
+    )
+    jira_builder = JiraBuilderAgent()
+    results = jira_builder.create_jira_issues(ready_batch)
+    return {"jira_create_results": state["jira_create_results"] + results}
 
 
 def _select_next_draft_node(state: GraphState) -> GraphState:
@@ -82,12 +147,14 @@ def _select_next_draft_node(state: GraphState) -> GraphState:
         "review_action": "",
         "review_edit_prompt": "",
         "meeting_summary": state["meeting_summary"],
-        "raw_recording_text": state["raw_recording_text"],
+        "meeting_transcript_text": state["meeting_transcript_text"],
+        "recording_file_path": state["recording_file_path"],
+        "jira_create_results": state["jira_create_results"],
     }
 
 
 def _select_next_route(state: GraphState) -> str:
-    return "collect_review_decision" if state["current_draft_ticket"] else "end_review"
+    return "collect_review_decision" if state["current_draft_ticket"] else "end"
 
 
 def _collect_review_decision_node(state: GraphState) -> GraphState:
@@ -139,7 +206,9 @@ def _collect_review_decision_node(state: GraphState) -> GraphState:
         "review_action": normalized_action,
         "review_edit_prompt": edit_prompt,
         "meeting_summary": state["meeting_summary"],
-        "raw_recording_text": state["raw_recording_text"],
+        "meeting_transcript_text": state["meeting_transcript_text"],
+        "recording_file_path": state["recording_file_path"],
+        "jira_create_results": state["jira_create_results"],
     }
 
 
@@ -180,13 +249,15 @@ def _review_agent_edit_node(state: GraphState) -> GraphState:
         "review_action": "",
         "review_edit_prompt": "",
         "meeting_summary": state["meeting_summary"],
-        "raw_recording_text": state["raw_recording_text"],
+        "meeting_transcript_text": state["meeting_transcript_text"],
+        "recording_file_path": state["recording_file_path"],
+        "jira_create_results": state["jira_create_results"],
     }
 
 
 def _post_edit_route(state: GraphState) -> str:
     draft = state["current_draft_ticket"]
-    if draft and not draft.reasons:
+    if draft:
         return "approve_draft"
     return "collect_review_decision"
 
@@ -194,8 +265,14 @@ def _post_edit_route(state: GraphState) -> str:
 def _approve_draft_node(state: GraphState) -> GraphState:
     draft = state["current_draft_ticket"]
     approved = list(state["approved_draft_tickets_batch"].tickets)
+    create_results = list(state["jira_create_results"])
     if draft:
         approved.append(draft.payload)
+        logger.info("Raising approved draft ticket immediately: %s", draft.event_id)
+        jira_builder = JiraBuilderAgent()
+        create_results.extend(
+            jira_builder.create_jira_issues(JiraTicketsBatch(tickets=[draft.payload]))
+        )
     return {
         "extracted_tasks": state["extracted_tasks"],
         "jira_tickets_batch": state["jira_tickets_batch"],
@@ -208,7 +285,9 @@ def _approve_draft_node(state: GraphState) -> GraphState:
         "review_action": "",
         "review_edit_prompt": "",
         "meeting_summary": state["meeting_summary"],
-        "raw_recording_text": state["raw_recording_text"],
+        "meeting_transcript_text": state["meeting_transcript_text"],
+        "recording_file_path": state["recording_file_path"],
+        "jira_create_results": create_results,
     }
 
 
@@ -229,36 +308,19 @@ def _reject_draft_node(state: GraphState) -> GraphState:
         "review_action": "",
         "review_edit_prompt": "",
         "meeting_summary": state["meeting_summary"],
-        "raw_recording_text": state["raw_recording_text"],
-    }
-
-
-def _end_review_node(state: GraphState) -> GraphState:
-    logger.info(
-        "Draft review complete: %d approved, %d rejected",
-        len(state["approved_draft_tickets_batch"].tickets),
-        len(state["rejected_draft_tickets"]),
-    )
-    return {
-        "extracted_tasks": state["extracted_tasks"],
-        "jira_tickets_batch": state["jira_tickets_batch"],
-        "draft_tickets": state["draft_tickets"],
-        "draft_tickets_for_review": state["draft_tickets_for_review"],
-        "approved_draft_tickets_batch": state["approved_draft_tickets_batch"],
-        "rejected_draft_tickets": state["rejected_draft_tickets"],
-        "review_index": state["review_index"],
-        "current_draft_ticket": state["current_draft_ticket"],
-        "review_action": state["review_action"],
-        "review_edit_prompt": state["review_edit_prompt"],
-        "meeting_summary": state["meeting_summary"],
-        "raw_recording_text": state["raw_recording_text"],
+        "meeting_transcript_text": state["meeting_transcript_text"],
+        "recording_file_path": state["recording_file_path"],
+        "jira_create_results": state["jira_create_results"],
     }
 
 
 def build_graph():
     graph = StateGraph(GraphState)
+    graph.add_node("transcribe_recording", _transcribe_recording_node)
+    graph.add_node("diarize_speakers", _diarize_speakers_node)
     graph.add_node("extract_tasks", _extract_tasks_node)
     graph.add_node("build_jira_tickets", _build_jira_tickets_node)
+    graph.add_node("raise_ready_tickets", _raise_ready_tickets_node)
     graph.add_node("generate_summary", _generate_summary_node)
     graph.add_node("prepare_draft_review", _prepare_draft_review_node)
     graph.add_node("select_next_draft", _select_next_draft_node)
@@ -266,16 +328,18 @@ def build_graph():
     graph.add_node("review_agent_edit", _review_agent_edit_node)
     graph.add_node("approve_draft", _approve_draft_node)
     graph.add_node("reject_draft", _reject_draft_node)
-    graph.add_node("end_review", _end_review_node)
-    graph.add_edge(START, "generate_summary")
-    graph.add_edge(START, "extract_tasks")
+    graph.add_edge(START, "transcribe_recording")
+    graph.add_edge("transcribe_recording", "diarize_speakers")
+    graph.add_edge("diarize_speakers", "generate_summary")
+    graph.add_edge("diarize_speakers", "extract_tasks")
     graph.add_edge("extract_tasks", "build_jira_tickets")
-    graph.add_edge(["build_jira_tickets", "generate_summary"], "prepare_draft_review")
+    graph.add_edge("build_jira_tickets", "raise_ready_tickets")
+    graph.add_edge(["raise_ready_tickets", "generate_summary"], "prepare_draft_review")
     graph.add_edge("prepare_draft_review", "select_next_draft")
     graph.add_conditional_edges(
         "select_next_draft",
         _select_next_route,
-        {"collect_review_decision": "collect_review_decision", "end_review": "end_review"},
+        {"collect_review_decision": "collect_review_decision", "end": END},
     )
     graph.add_conditional_edges(
         "collect_review_decision",
@@ -296,6 +360,8 @@ def build_graph():
     )
     graph.add_edge("approve_draft", "select_next_draft")
     graph.add_edge("reject_draft", "select_next_draft")
-    graph.add_edge("end_review", END)
+
+
+    
     return graph.compile()
 

@@ -9,17 +9,18 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from graph.workflow import build_graph  # noqa: E402
 from core.models import JiraTicketsBatch, MeetingSummary  # noqa: E402
-from agents.jira_builder_agent import JiraBuilderAgent  # noqa: E402
 from utils.logger import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
 
 
-def run_demo(raw_recording_text: str):
+def run_demo(recording_file_path: str):
     logger.info("Planning workflow")
     graph = build_graph()
     initial_state = {
-        "raw_recording_text": raw_recording_text,
+        "recording_file_path": recording_file_path,
+        "meeting_transcript_text": "",
+        "diarized_transcript_text": "",
         "extracted_tasks": [],
         "jira_tickets_batch": JiraTicketsBatch(tickets=[]),
         "draft_tickets": [],
@@ -30,6 +31,7 @@ def run_demo(raw_recording_text: str):
         "current_draft_ticket": None,
         "review_action": "",
         "review_edit_prompt": "",
+        "jira_create_results": [],
         "meeting_summary": MeetingSummary(
             summary="",
             key_points=[],
@@ -51,7 +53,6 @@ def run_demo(raw_recording_text: str):
         "draft_tickets": final_state["draft_tickets"],
         "meeting_summary": final_state["meeting_summary"],
     }
-    jira_builder = JiraBuilderAgent()
     output["approved_draft_tickets_batch"] = final_state["approved_draft_tickets_batch"]
     output["rejected_draft_tickets"] = final_state["rejected_draft_tickets"]
 
@@ -61,34 +62,24 @@ def run_demo(raw_recording_text: str):
     )
     final_batch_to_raise = JiraTicketsBatch(tickets=combined_tickets)
     output["final_batch_to_raise"] = final_batch_to_raise
-    logger.info(
-        "Creating Jira issues for %d final approved ticket(s)",
-        len(final_batch_to_raise.tickets),
-    )
-    output["jira_create_results"] = jira_builder.create_jira_issues(final_batch_to_raise)
+    output["jira_create_results"] = final_state["jira_create_results"]
     logger.info("Workflow finished")
     return output
 
 
 if __name__ == "__main__":
-    sample_transcript = """
-[00:00] John: Good morning everyone. Quick status sync for checkout and release prep.
-[00:10] Priya: Auth middleware tests are done from QA side.
-[00:22] John: Alex, finish Stripe API integration by 2026-04-20. High priority.
-[00:36] Alex: Confirmed, I’ll deliver by 2026-04-20.
-[00:48] John: Priya, create end-to-end checkout test cases by 2026-04-21. Medium priority.
-[01:02] Priya: Sure, I'll take that.
-[01:15] Mike: We still see webhook retries failing intermittently.
-[01:24] John: Mike, fix the webhook retry bug and push patch by 2026-04-19. High priority.
-[01:40] Mike: Done, I’ll handle it.
-[01:52] John: Someone update the API docs soon.
-[02:03] John: Let's also improve monitoring maybe this week.
-[02:14] John: Alex, cleanup payment endpoint docs by 2026-04-22. Low priority.
-[02:27] Alex: Got it.
-[02:35] John: Great, let's close.
-""".strip()
-
-    out = run_demo(sample_transcript)
+    recordings_dir = SRC_ROOT / "recordings"
+    preferred_audio = recordings_dir / "meet_recording.wav"
+    fallback_audio = recordings_dir / "meeting_audio.wav"
+    recording_file_path = (
+        preferred_audio if preferred_audio.exists() else fallback_audio
+    )
+    if not recording_file_path.exists():
+        raise FileNotFoundError(
+            "No recording file found. Expected recordings/meet_recording.wav "
+            "or recordings/meeting_audio.wav"
+        )
+    out = run_demo(str(recording_file_path))
     # Keep only Jira create responses as terminal output.
     print(out["meeting_summary"])
     print(out["jira_create_results"])

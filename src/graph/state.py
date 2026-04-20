@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 
 from core.models import DraftJiraTicket, JiraTicketsBatch, MeetingSummary
 
 
 class GraphState(TypedDict):
-    raw_recording_text: str
+    recording_file_path: str
+    meeting_transcript_text: str
+    diarized_transcript_text: str
     extracted_tasks: List[dict]
     jira_tickets_batch: JiraTicketsBatch
     draft_tickets: List[DraftJiraTicket]
@@ -18,4 +20,5 @@ class GraphState(TypedDict):
     review_action: str
     review_edit_prompt: str
     meeting_summary: MeetingSummary
+    jira_create_results: List[Dict[str, Any]]
 

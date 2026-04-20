@@ -29,7 +29,7 @@ class SummaryAgent:
     def __init__(self, model: str | None = None):
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-    def summarize(self, raw_recording_text: str) -> MeetingSummary:
+    def summarize(self, meeting_transcript_text: str) -> MeetingSummary:
         logger.info("Generating meeting summary")
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -45,7 +45,7 @@ class SummaryAgent:
                 HumanMessage(
                     content=(
                         "Transcript:\n"
-                        f"{raw_recording_text}\n\n"
+                        f"{meeting_transcript_text}\n\n"
                         "Return a structured meeting summary across the full meeting context."
                     )
                 ),

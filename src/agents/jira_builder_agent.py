@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import base64
+import re
+from difflib import get_close_matches
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -64,13 +66,41 @@ class JiraBuilderAgent:
         if not mapping:
             return None
 
+        # 1) Prefer explicit extracted assignees.
         for name in task.assigned_to:
             key = str(name).lower()
             if key in mapping:
                 return mapping[key]
+            close = get_close_matches(key, list(mapping.keys()), n=1, cutoff=0.8)
+            if close:
+                return mapping[close[0]]
 
-        key = str(task.assigned_by).lower()
-        return mapping.get(key)
+        # 1.5) Fallback to addressee list if extractor captured spoken_to better than assigned_to.
+        for name in task.spoken_to:
+            key = str(name).lower()
+            if key in mapping:
+                return mapping[key]
+            close = get_close_matches(key, list(mapping.keys()), n=1, cutoff=0.8)
+            if close:
+                return mapping[close[0]]
+
+        # 2) Infer from description patterns like "Alex to finish ..." or "Alex, finish ...".
+        desc = task.description.strip().lower()
+        starts_with_name = re.match(r"^([a-z][a-z0-9_-]{1,30})\s*(?:to|,)\b", desc)
+        if starts_with_name:
+            inferred = starts_with_name.group(1)
+            if inferred in mapping:
+                return mapping[inferred]
+            close = get_close_matches(inferred, list(mapping.keys()), n=1, cutoff=0.8)
+            if close:
+                return mapping[close[0]]
+
+        # 3) If any mapped user name appears as a whole word in description, use it.
+        for name_key, account_id in mapping.items():
+            if re.search(rf"\b{re.escape(name_key)}\b", desc):
+                return account_id
+
+        return None
 
     @staticmethod
     def _is_task_clear(task: ExtractedTask) -> bool:
@@ -88,9 +118,7 @@ class JiraBuilderAgent:
         assignee_account_id: Optional[str],
     ) -> List[str]:
         reasons: List[str] = []
-        if task.assigned_to and not assignee_account_id:
-            reasons.append("assignee_not_found")
-        if not task.assigned_to:
+        if not assignee_account_id:
             reasons.append("assignee_not_found")
         if not task.due_date:
             reasons.append("due_date_missing")
