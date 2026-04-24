@@ -1,6 +1,7 @@
 # MeetFlow AI: Recording-to-Jira Automation
 
 Turn meeting recordings or transcripts into:
+
 - structured action items
 - Jira tickets (ready + draft review model)
 - meeting summaries
@@ -13,11 +14,11 @@ The project supports both one-off local runs and scheduled Google Drive polling 
 1. Ingests meeting input (`.wav` audio or text transcript).
 2. Transcribes audio with timestamps and speaker normalization.
 3. Extracts actionable events:
-   - `task` (Jira candidates)
-   - `meet` (future meeting scheduling hints)
+  - `task` (Jira candidates)
+  - `meet` (future meeting scheduling hints)
 4. Builds Jira payloads:
-   - raises ready tickets automatically
-   - keeps ambiguous tickets as drafts for review paths
+  - raises ready tickets automatically
+  - keeps ambiguous tickets as drafts for review paths
 5. Generates a full meeting summary in parallel.
 6. Creates `.ics` files for future meetings detected in conversation.
 
@@ -74,6 +75,7 @@ GOOGLE_SERVICE_ACCOUNT_JSON=
 ```
 
 Notes:
+
 - `JIRA_ASSIGNEE_ACCOUNTID_MAP_JSON` should map assignee names to Jira accountIds.
 - `GOOGLE_DRIVE_FOLDER_LINK` can be either full folder URL or folder ID.
 - `GOOGLE_SERVICE_ACCOUNT_JSON` must be an absolute local path to your service-account JSON file.
@@ -81,6 +83,7 @@ Notes:
 ## Run Locally (Single Recording)
 
 The local flow reads:
+
 - `src/recordings/meet_recording.wav` (preferred), or
 - `src/recordings/meeting_audio.wav` (fallback)
 
@@ -91,6 +94,7 @@ poetry run python src/main.py
 ```
 
 Output includes:
+
 - meeting summary
 - Jira create results for raised tickets
 - `.ics` generation for detected future meetings
@@ -102,11 +106,13 @@ poetry run uvicorn src.api.server:app --host 127.0.0.1 --port 8002
 ```
 
 Health route:
+
 - `GET /` -> JSON status payload
 
 ## Google Drive Cron Automation (New Files Only)
 
 The Drive worker:
+
 - polls the configured Drive folder
 - supports text, Google Docs, and audio files (`audio/*`, `.wav`, `.mp3`, etc.)
 - processes only unprocessed files (tracked by file ID)
@@ -122,6 +128,7 @@ poetry run python src/services/drive_cron_worker.py
 ```
 
 Output files:
+
 - `src/output/drive_processed_files.json`
 - `src/output/drive_runs/run_*.json`
 
@@ -148,8 +155,8 @@ Output files:
 
 ## Common Troubleshooting
 
-- **`address already in use`**: change API port (`--port 8003`).
-- **`command not found` while sourcing `.env`**: remove spaces around `=` in env file.
+- `**address already in use**`: change API port (`--port 8003`).
+- `**command not found` while sourcing `.env**`: remove spaces around `=` in env file.
 - **Drive worker processes 0 files**:
   - ensure files are in the configured folder
   - ensure MIME/file type is supported
@@ -158,11 +165,7 @@ Output files:
   - check DNS/proxy/VPN
   - unset proxy vars and retry
 
-## Security
 
-- Never commit `.env` or service-account JSON keys.
-- Rotate any key/token that was ever exposed in Git history.
 
-## License
 
-Add your preferred license for production usage.
+
