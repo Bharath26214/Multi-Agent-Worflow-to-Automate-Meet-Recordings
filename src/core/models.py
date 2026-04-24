@@ -6,10 +6,10 @@ from pydantic import BaseModel, Field
 
 
 class ExtractedTask(BaseModel):
-    """Canonical task extracted from a meeting transcript."""
+    """Canonical actionable event extracted from a meeting transcript."""
 
     event_id: str = Field(description="Unique task event id, e.g. EVT-00001")
-    type: Literal["task"] = "task"
+    type: Literal["task", "meet"] = "task"
     spoken_by: str
     spoken_to: List[str] = Field(default_factory=list, description="People addressed")
     description: str = Field(description="Description of the task")
@@ -23,6 +23,14 @@ class ExtractedTask(BaseModel):
     t1: float = Field(description="End timestamp in seconds")
     created_by: Literal["meet-agent"] = "meet-agent"
     confidence: float = Field(ge=0, le=1, description="Extraction confidence score")
+    meeting_date: str | None = Field(
+        default=None,
+        description="Meeting start datetime in ISO format for type='meet'.",
+    )
+    time_zone: str | None = Field(
+        default=None,
+        description="Timezone for the meeting event for type='meet'.",
+    )
 
 
 class ExtractorOutput(BaseModel):

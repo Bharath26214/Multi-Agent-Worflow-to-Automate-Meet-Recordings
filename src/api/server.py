@@ -8,8 +8,6 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
@@ -17,12 +15,16 @@ sys.path.insert(0, str(SRC_ROOT))
 
 from agents.extractor_agent import ExtractorAgent  # noqa: E402
 from agents.jira_builder_agent import JiraBuilderAgent  # noqa: E402
-from core.models import DraftJiraTicket, ExtractedTask, JiraTicketsBatch  # noqa: E402
+from agents.summary_agent import SummaryAgent  # noqa: E402
+from core.models import (  # noqa: E402
+    DraftJiraTicket,
+    ExtractedTask,
+    JiraTicketsBatch,
+    MeetingSummary,
+)
 from utils.logger import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
-WORKSPACE_ROOT = SRC_ROOT.parent
-FRONTEND_DIR = WORKSPACE_ROOT / "frontend"
 
 app = FastAPI(title="Meet-Jira Local UI API", version="0.1.0")
 app.add_middleware(
@@ -47,7 +49,8 @@ class EditDraftRequest(BaseModel):
 
 
 class SessionState(BaseModel):
-    extracted_tasks: List[dict]
+    extracted_events: List[dict]
+    meeting_summary: MeetingSummary
     ready_tickets: JiraTicketsBatch
     draft_tickets: List[DraftJiraTicket]
     approved_draft_tickets: JiraTicketsBatch
@@ -58,9 +61,16 @@ SESSIONS: Dict[str, SessionState] = {}
 
 
 def _serialize_session(session_id: str, state: SessionState) -> dict:
+    task_count = sum(1 for e in state.extracted_events if e.get("type") == "task")
+    meet_count = sum(1 for e in state.extracted_events if e.get("type") == "meet")
     return {
         "session_id": session_id,
-        "extracted_tasks": state.extracted_tasks,
+        "extracted_events": state.extracted_events,
+        "event_counts": {
+            "task": task_count,
+            "meet": meet_count,
+        },
+        "meeting_summary": state.meeting_summary.model_dump(),
         "ready_tickets": state.ready_tickets.model_dump(),
         "draft_tickets": [d.model_dump() for d in state.draft_tickets],
         "approved_draft_tickets": state.approved_draft_tickets.model_dump(),
@@ -140,17 +150,21 @@ def start_session(request: StartSessionRequest) -> dict:
     logger.info("Starting UI session")
     extractor = ExtractorAgent()
     jira_builder = JiraBuilderAgent()
+    summary_agent = SummaryAgent()
     try:
         extracted = extractor.extract_tasks_from_text(request.transcript)
         tasks = [ExtractedTask.model_validate(t.model_dump()) for t in extracted.tasks]
-        review_queue = jira_builder.build_jira_review_queue(tasks)
+        task_events = [t for t in tasks if t.type == "task"]
+        review_queue = jira_builder.build_jira_review_queue(task_events)
+        meeting_summary = summary_agent.summarize(request.transcript)
     except HTTPException:
         raise
     except Exception as exc:
         _raise_external_service_error("Transcript processing", exc)
 
     state = SessionState(
-        extracted_tasks=[t.model_dump() for t in extracted.tasks],
+        extracted_events=[t.model_dump() for t in tasks],
+        meeting_summary=meeting_summary,
         ready_tickets=review_queue.ready_batch,
         draft_tickets=review_queue.draft_tickets,
         approved_draft_tickets=JiraTicketsBatch(tickets=[]),
@@ -271,13 +285,7 @@ def raise_tickets(session_id: str) -> dict:
     }
 
 
-if FRONTEND_DIR.exists():
-    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR)), name="assets")
-
-
 @app.get("/")
-def serve_ui() -> FileResponse:
-    if not FRONTEND_DIR.exists():
-        raise HTTPException(status_code=404, detail="frontend directory not found")
-    return FileResponse(str(FRONTEND_DIR / "index.html"))
+def root() -> dict:
+    return {"status": "ok", "service": "meet-jira-api"}
 

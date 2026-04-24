@@ -36,9 +36,10 @@ def _extract_tasks_node(state: GraphState) -> GraphState:
 
 def _build_jira_tickets_node(state: GraphState) -> GraphState:
     logger.info("Creating Jira Tickets")
-    tasks: List[ExtractedTask] = [
+    events: List[ExtractedTask] = [
         ExtractedTask.model_validate(t) for t in state["extracted_tasks"]
     ]
+    tasks: List[ExtractedTask] = [e for e in events if e.type == "task"]
     jira_builder = JiraBuilderAgent()
     review_queue: JiraReviewQueue = jira_builder.build_jira_review_queue(tasks)
     batch: JiraTicketsBatch = review_queue.ready_batch

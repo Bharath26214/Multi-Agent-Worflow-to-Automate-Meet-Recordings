@@ -3,3 +3,16 @@
 __pycache__/
 
 .DS_Store
+
+src/output/*
+!src/output/.gitkeep
+
+demo/workflow_graph.mmd
+demo/sample1.txt
+demo/sample2.txt
+
+*.log
+demo/*.log
+
+demo/generated_meetings/
+*.ics
